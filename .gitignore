@@ -1,0 +1,5 @@
+*.out
+*.npy
+__pycache__/
+*.ipynb
+ckpt/
