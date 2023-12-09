@@ -12,24 +12,23 @@ from torch.utils.data import DataLoader
 from transformers import set_seed
 from tqdm import tqdm
 
-import modeling
-import utils
+import cl_method.modeling
+import ft_method.modeling
+import cl_method.utils
 
 def main():
-    ####### argument 수정하기
     parser = argparse.ArgumentParser()
     parser.add_argument('--model_name', default='bert-base-uncased', type=str)
     parser.add_argument('--pooling', default='first', type=str)
 
     # Hyper parameter
-    parser.add_argument('--temperature', default=0.05, type=int)
-    parser.add_argument('--batch_size', default=64, type=int)
-    parser.add_argument('--max_seq_len', default=512, type=int) # To be checked
-    parser.add_argument('--epochs', default=10, type=int)
-    parser.add_argument('--lr', default=1e-5, type=float) 
+    parser.add_argument('--method', default = "unsup", choices=['unsup', 'sup', 'ft'], type=str)
+    parser.add_argument('--max_seq_len', default=512, type=int)
     parser.add_argument('--gpu', default=0, type=int)
     parser.add_argument('--seed', default=42, type=int)
-    parser.add_argument('--patience', default = 10, type=int) # For early stop. not implemented yet
+
+    parser.add_argument('--freeze_lm', default=False, action='store_true')
+    parser.add_argument('--num_classes', default=4, type=int) 
 
     args = parser.parse_args()
     setattr(args, 'device', f'cuda:{args.gpu}' if torch.cuda.is_available() and args.gpu >= 0 else 'cpu')
@@ -42,30 +41,41 @@ def main():
 
     
 
-    df = pd.read_csv('./data/preprocessed_data.csv')
-    shuffled_dataframe = df.sample(frac=1, random_state=42).reset_index(drop=True)
+    df_test = pd.read_csv('./data/df_test.csv')
 
-    checkpoint = torch.load("./ckpt/best_model.pt")
+    checkpoint = torch.load(f"./ckpt/{args.method}_best_model.pt")
     model_state_dict = checkpoint["model_state_dict"]
 
-    cl_model = modeling.Sup_CLModel(args).to(args.device)
-    cl_model.load_state_dict(model_state_dict)
-    # test_evaluator = utils.ClusteringEvaluator(df['Abstract']values.tolist(), df_test['Field'])
+    if args.method in ['sup', 'unsup']:
+        model = cl_method.modeling.CL_Model(args).to(args.device)
+    elif args.method == 'ft':
+        model = ft_method.modeling.BertClassifier(args).to(args.device)
+    elif args.method == 'bert':
+        model = cl_method.modeling.CL_Model(args).to(args.device)
 
-    # 나중엔 test만 visualization 해야할듯?
-    sentence_representations = cl_model.encode(shuffled_dataframe['Abstract'].values.tolist(), batch_size = 64)
+    model.load_state_dict(model_state_dict)
+    sentence_representations = model.encode(df_test['Abstract'].values.tolist(), batch_size = 64)
+    
     rule = {"NLP":0, "VISION":1, "RS":2, "MI":3}
-    labels = [rule[label] for label in shuffled_dataframe['Field']]
-    # Apply T-SNE
-    tsne = TSNE(n_components=2, random_state=42)
-    tsne_result = tsne.fit_transform(sentence_representations)
+    numeric_labels = [rule[label] for label in df_test['Field']]
 
-    # Visualize the result
-    # color result 추가해야함
-    plt.scatter(tsne_result[:, 0], tsne_result[:, 1], c=labels)
-    plt.title('T-SNE Visualization')
+    # Perform t-SNE
+    tsne = TSNE(n_components=2, random_state=42)
+    sr_tsne = tsne.fit_transform(sentence_representations)
+
+    plt.figure(figsize=(10, 8))
+
+    # Scatter plot each class with a different color
+    for class_name, numeric_label in rule.items():
+        indices = np.array(numeric_labels) == numeric_label
+        plt.scatter(sr_tsne[indices, 0], sr_tsne[indices, 1], label=f'{class_name}')
+
+
+    plt.title(f"{args.method} T-SNE")
     plt.legend()
     plt.show()
-    plt.savefig("asdf")
+    plt.savefig(f"./figures/{args.method}_fig")
 
-main()
+
+if __name__ == "__main__":
+    main()

@@ -25,13 +25,15 @@ class Pooler(nn.Module):
         else:
             raise NotImplementedError
         
-class Sup_CLModel(nn.Module):
+class CL_Model(nn.Module):
     def __init__(self, args):
-        super(Sup_CLModel, self).__init__()
+        super(CL_Model, self).__init__()
         self.args = args
         self.model = BertModel.from_pretrained(args.model_name)
         self.tokenizer = BertTokenizer.from_pretrained(args.model_name)
         self.cl_pooler = Pooler(args.pooling)
+        self.cos = nn.CosineSimilarity(dim=-1, eps=1e-6)
+        self.unsup_loss_fn = nn.CrossEntropyLoss()
     
     def forward(self, input_ids, attention_mask):
         return self.model(input_ids = input_ids, attention_mask = attention_mask, return_dict = True)
@@ -93,9 +95,7 @@ class Sup_CLModel(nn.Module):
         '''
 
         embeddings = self.cl_pooler(outputs) # [bsz, dim]
-        # sim_matrix = torch.matmul(embeddings, embeddings.T) # [bsz, bsz]
-        cos = nn.CosineSimilarity(dim=-1, eps=1e-6)
-        sim_matrix = cos(embeddings.unsqueeze(1), embeddings.unsqueeze(0)) # [bsz, bsz]
+        sim_matrix = self.cos(embeddings.unsqueeze(1), embeddings.unsqueeze(0)) # [bsz, bsz]
 
         labels = labels.unsqueeze(1)
         positive_mask = torch.eq(labels, labels.T) # [bsz, bsz]
@@ -115,4 +115,16 @@ class Sup_CLModel(nn.Module):
         loss = torch.log(total + 1e-8) - torch.log(pos+ 1e-8)
 
         return torch.mean(loss)
+    
+    def unsupervised_cl_loss(self, outputs1, outputs2):
+        embeddings1 = self.cl_pooler(outputs1) # [bsz, dim]
+        embeddings2 = self.cl_pooler(outputs2) # [bsz, dim]
+
+        sim_matrix = self.cos(embeddings1.unsqueeze(1), embeddings2.unsqueeze(0)) # [bsz, bsz]
+        sim_matrix /= self.args.temperature
+        labels = torch.arange(sim_matrix.size(0)).long().to(self.args.device)
+
+        loss = self.unsup_loss_fn(sim_matrix, labels)
+
+        return loss
     
